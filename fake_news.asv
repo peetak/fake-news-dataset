@@ -1,0 +1,89 @@
+filename = "fake_or_real_news.xlsx";
+%data = readtable(filename,'TextType','string');
+load('fakeNewsData.mat');
+idxLabel = find(data.label ~= 'FAKE' & data.label ~= 'REAL');
+data(idxLabel,:) = [];
+
+idxEmpty = strlength(data.text) == 0;
+data(idxEmpty,:) = [];
+
+data.label = categorical(data.label);
+
+%% visualizing the distribution of the classes
+h = histogram(data.label);
+
+%% partitioning the dataset
+
+cvp = cvpartition(data.label,'Holdout',0.1);
+dataTrain = data(training(cvp),:);
+dataTest = data(test(cvp),:);
+
+%% Partitioning into training and test sets
+textDataTrain = dataTrain.text;
+textDataTest = dataTest.text;
+YTrain = dataTrain.label;
+YTest = dataTest.label;
+
+%% visualize training data
+figure
+wordcloud(textDataTrain);
+title("Training Data")
+
+%% Little Preprocessing
+textDataTrain = erasePunctuation(textDataTrain);
+textDataTrain = lower(textDataTrain);
+documentsTrain = tokenizedDocument(textDataTrain);
+
+%% Word Embedding
+tic;
+embeddingDimension = 10;
+embeddingEpochs = 50;
+
+emb = trainWordEmbedding(documentsTrain, ...
+    'Dimension',embeddingDimension, ...
+    'NumEpochs',embeddingEpochs, ...
+    'Verbose',1)
+toc
+
+%% length of docs
+documentLengths = doclength(documentsTrain);
+figure
+histogram(documentLengths)
+title("Document Lengths")
+xlabel("Length")
+ylabel("Number of Documents")
+
+%% Since most of the docs have tokens of size 1800, padding with seq length of 1800
+
+sequenceLength = 1800;
+documentsTruncatedTrain = docfun(@(words) words(1:min(sequenceLength,end)),documentsTrain);
+
+%% Converting the doc to sequences to be fed into the LSTM
+XTrain = doc2sequence(emb,documentsTruncatedTrain);
+
+%% Left Padding
+for i = 1:numel(XTrain)
+    XTrain{i} = leftPad(XTrain{i},sequenceLength);
+end
+XTrain(1:5)'
+
+%% Train Network
+inputSize = embeddingDimension;
+outputSize = 180;
+numClasses = numel(categories(YTrain));
+
+layers = [ ...
+    sequenceInputLayer(inputSize)
+    lstmLayer(outputSize,'OutputMode','last')
+    fullyConnectedLayer(numClasses)
+    softmaxLayer
+    classificationLayer]
+
+
+options = trainingOptions('sgdm', ...
+    'InitialLearnRate',0.05, ...
+    'Plots','training-progress', ...
+    'Verbose',1)
+
+net = trainNetwork(XTrain,YTrain,layers,options);;
+
